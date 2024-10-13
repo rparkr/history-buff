@@ -190,19 +190,12 @@ def __(Literal, Path, glob, logger, pl, platform, sqlite3):
                     "visit_table": "moz_historyvisits",
                 },
             }
-            url_table = tables[self.browser]["url_table"]
-            visit_table = tables[self.browser]["visit_table"]
-            url_table_columns = self.get_column_names(url_table)
-            visit_table_columns = self.get_column_names(visit_table)
-            # Remove the overlapping columns to prevent duplicates in the joined table
-            visit_columns_string = ",\n".join(
-                [
-                    f"visit_table.{column}"
-                    if column not in url_table_columns
-                    else f"visit_table.{column} as {column}_visit"
-                    for column in visit_table_columns
-                ]
-            )
+            url_table = tables[self.browser][
+                "url_table"
+            ]  # URL-level table (all distinct)
+            visit_table = tables[self.browser][
+                "visit_table"
+            ]  # visit-level table (duplicate URLs allowed)
 
             # Google Chrome's timestamps are in units of microseconds
             # since 1-Jan-1601, while Firefox's are microsecond
@@ -215,34 +208,28 @@ def __(Literal, Path, glob, logger, pl, platform, sqlite3):
             # In SQLite you cannot use placeholders for table or column names
             # so I use string interpolation
             query = f"""
-            with full_history as (
-                select
-                    url_table.*,
-                    {visit_columns_string}
-                from 
-                    {url_table} as url_table
-                inner join
-                    {visit_table} as visit_table
-                    on (url_table.id = visit_table.{'url' if self.browser == 'chrome' else 'place_id'})
-            )
-
             select
                 {self.db_columns[self.browser]["id"]} as id,
                 {self.db_columns[self.browser]["url"]} as url,
                 {self.db_columns[self.browser]["title"]} as title,
                 {self.db_columns[self.browser]["visit_count"]} as visit_count,
-                datetime(({self.db_columns[self.browser]["last_visit_time"]} / 1e6) + {chrome_adjustment}, 'unixepoch') as last_visit_time,
-                datetime(({self.db_columns[self.browser]["visit_time"]} / 1e6) + {chrome_adjustment}, 'unixepoch') as visit_time
+                strftime('%Y-%m-%d %H:%M:%f', ({self.db_columns[self.browser]["last_visit_time"]} / 1e6) + {chrome_adjustment}, 'unixepoch') as last_visit_time
             from
-                full_history
+                {url_table}
             """
             logger.info("SQL query:\n\n%s", query)
-            # with sqlite3.connect(self.db_filepath) as con:
-            #     return pl.read_database(query=query, connection=con)
+            with sqlite3.connect(self.db_filepath) as con:
+                return pl.read_database(query=query, connection=con).with_columns(
+                    last_visit_time=pl.col("last_visit_time").str.to_datetime()
+                )
             # Explicitly use row orientation since that is how SQLite
             # returns the data with cursor.fetchall().
-            rows, columns = self.execute_query(query)
-            return pl.DataFrame(data=rows, schema=columns, orient="row")
+            # rows, columns = self.execute_query(query)
+            # return pl.DataFrame(
+            #     data=rows, schema=columns, orient="row"
+            # ).with_columns(
+            #     last_visit_time=pl.col("last_visit_time").str.to_datetime()
+            # )
     return (BrowserHistoryDB,)
 
 

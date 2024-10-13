@@ -1,0 +1,14 @@
+[project]
+name = "history-buff"
+version = "0.1.0"
+description = "Tool for searching web browsing history using natural language."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+# [project.scripts]
+# hello = "history_buff:hello"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

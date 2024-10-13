@@ -1,16 +1,13 @@
 import marimo
 
-__generated_with = "0.9.7"
-app = marimo.App(
-    width="medium",
-    app_title="Load history",
-    css_file="/home/ryan/code/custom.css",
-)
+__generated_with = "0.9.8"
+app = marimo.App(width="medium", app_title="Load history", css_file="")
 
 
 @app.cell
 def __():
     import glob
+    import logging
     from pathlib import Path
     import platform  # determine operating system. See: https://note.nkmk.me/en/python-platform-system-release-version/
     import sqlite3
@@ -18,7 +15,9 @@ def __():
 
     import marimo as mo
     import polars as pl
-    return Literal, Path, glob, mo, pl, platform, sqlite3
+
+    logger = logging.getLogger(__name__)
+    return Literal, Path, glob, logger, logging, mo, pl, platform, sqlite3
 
 
 @app.cell(hide_code=True)
@@ -36,7 +35,7 @@ def __(mo):
 
 
 @app.cell
-def __(Literal, Path, glob, pl, platform, sqlite3):
+def __(Literal, Path, glob, logger, pl, platform, sqlite3):
     class BrowserHistoryDB:
         def __init__(
             self,
@@ -187,49 +186,31 @@ def __(Literal, Path, glob, pl, platform, sqlite3):
             tables = {
                 "chrome": {"url_table": "urls", "visit_table": "visits"},
                 "firefox": {
-                    "url_table": "moz_historyvisits",
-                    "visit_table": "moz_places",
+                    "url_table": "moz_places",
+                    "visit_table": "moz_historyvisits",
                 },
             }
-            url_table_columns = self.get_column_names(
-                tables[self.browser]["url_table"]
-            )
-            visit_table_columns = self.get_column_names(
-                tables[self.browser]["visit_table"]
-            )
+            url_table = tables[self.browser]["url_table"]
+            visit_table = tables[self.browser]["visit_table"]
+            url_table_columns = self.get_column_names(url_table)
+            visit_table_columns = self.get_column_names(visit_table)
             # Remove the overlapping columns to prevent duplicates in the joined table
             visit_columns_string = ",\n".join(
                 [
                     f"visit_table.{column}"
                     if column not in url_table_columns
-                    else f"visit_table.{column} as visit_{column}"
+                    else f"visit_table.{column} as {column}_visit"
                     for column in visit_table_columns
                 ]
             )
 
-            # Calculate visit duration in Firefox's database, since it does not
-            # seem to store that information in the visits table.
-            firefox_visit_duration_cte = """
-                , firefox_visit_duration as (
-                    select
-                        current_visit.id,
-                        (next_visit.visit_date - current_visit.visit_date) as visit_duration
-                    from
-                        full_history as current_visit
-                    left join full_history as next_visit on (
-                        next_visit.from_visit = current_visit.id
-                    )
-                )
-                """
-            if self.browser == "chrome":
-                visit_duration_column = self.db_columns[self.browser][
-                    "visit_duration"
-                ]
-            else:
-                visit_duration_column = "firefox_visit_duration.visit_duration"
-
-            url_table = tables[self.browser]["url_table"]
-            visit_table = tables[self.browser]["visit_table"]
+            # Google Chrome's timestamps are in units of microseconds
+            # since 1-Jan-1601, while Firefox's are microsecond
+            # since 1-Jan-1970 (the Unix epoch)
+            # See: https://stackoverflow.com/questions/20458406/what-is-the-format-of-chromes-timestamps
+            chrome_adjustment = (
+                "strftime('%s', '1601-01-01')" if self.browser == "chrome" else 0
+            )
 
             # In SQLite you cannot use placeholders for table or column names
             # so I use string interpolation
@@ -242,44 +223,82 @@ def __(Literal, Path, glob, pl, platform, sqlite3):
                     {url_table} as url_table
                 inner join
                     {visit_table} as visit_table
-                    on (visit_table.id = url_table.id)
-            ){"" if self.browser == "chrome" else firefox_visit_duration_cte}
-            
+                    on (url_table.id = visit_table.{'url' if self.browser == 'chrome' else 'place_id'})
+            )
+
             select
-                full_history.{self.db_columns[self.browser]["id"]} as id,
+                {self.db_columns[self.browser]["id"]} as id,
                 {self.db_columns[self.browser]["url"]} as url,
                 {self.db_columns[self.browser]["title"]} as title,
                 {self.db_columns[self.browser]["visit_count"]} as visit_count,
-                {self.db_columns[self.browser]["last_visit_time"]} as last_visit_time,
-                {self.db_columns[self.browser]["visit_time"]} as visit_time,
-                {visit_duration_column} / 1000 as visit_duration
+                datetime(({self.db_columns[self.browser]["last_visit_time"]} / 1e6) + {chrome_adjustment}, 'unixepoch') as last_visit_time,
+                datetime(({self.db_columns[self.browser]["visit_time"]} / 1e6) + {chrome_adjustment}, 'unixepoch') as visit_time
             from
                 full_history
-            {"" if self.browser == "chrome" else "left join firefox_visit_duration on (full_history.id = firefox_visit_duration.id)"}
             """
-            print(query)
-            with sqlite3.connect(self.db_filepath) as con:
-                return pl.read_database(query=query, connection=con)
+            logger.info("SQL query:\n\n%s", query)
+            # with sqlite3.connect(self.db_filepath) as con:
+            #     return pl.read_database(query=query, connection=con)
             # Explicitly use row orientation since that is how SQLite
             # returns the data with cursor.fetchall().
-            # rows, columns = self.execute_query(query)
-            # return pl.DataFrame(data=rows, schema=columns, orient="row")
+            rows, columns = self.execute_query(query)
+            return pl.DataFrame(data=rows, schema=columns, orient="row")
     return (BrowserHistoryDB,)
 
 
 @app.cell
-def __(Path, pl, sqlite3):
-    table_name = "visits"
-    query = f"PRAGMA table_info({table_name})"
-    with sqlite3.connect(
-        Path.home() / ".config/google-chrome/Default/History"
-    ) as con:
-        result = con.execute(query)
+def __(mo):
+    browser_selection = mo.ui.dropdown(
+        options=["chrome", "firefox"], value=None, allow_select_none=True
+    )
+    table_selection = mo.ui.dropdown(
+        options=["urls", "visits", "moz_places", "moz_historyvisits"],
+        value=None,
+        allow_select_none=True,
+    )
+    return browser_selection, table_selection
+
+
+@app.cell
+def __(browser_selection, mo, table_selection):
+    _md = mo.md(
+        f"""
+        ### Preview browsing history tables
+
+        Browser: {browser_selection}  
+        Table: {table_selection}
+        """
+    )
+    _md
+    return
+
+
+@app.cell
+def __(Path, browser_selection, mo, pl, sqlite3, table_selection):
+    mo.stop(
+        predicate=not (browser_selection.value and table_selection.value),
+        output="Select the browser and table",
+    )
+
+    if browser_selection.value == "chrome":
+        db_filepath = Path.home() / ".config/google-chrome/Default/History"
+    else:
+        db_filepath = (
+            Path.home()
+            / "/home/ryan/.mozilla/firefox/0f8ikj9p.default-release/places.sqlite"
+        )
+    # query = f"PRAGMA table_info({table_name})"  # describe the table's columns
+    query = f"select * from {table_selection.value}"  # sample the table
+    with sqlite3.connect(db_filepath) as con:
+        # result = con.execute(query)
         _df = pl.read_database(query=query, connection=con)
 
-    with pl.Config(tbl_rows=100):
-        print(_df)
-    return con, query, result, table_name
+    with mo.capture_stdout() as buffer:
+        with pl.Config(tbl_rows=20, tbl_width_chars=1000, tbl_cols=20):
+            print(_df)
+    _output = mo.plain_text(buffer.getvalue())
+    _output
+    return buffer, con, db_filepath, query
 
 
 @app.cell

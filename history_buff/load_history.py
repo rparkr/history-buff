@@ -128,19 +128,19 @@ class BrowserHistoryDB:
         history_location = {
             "linux": {
                 "chrome": user_home / ".config/google-chrome/Default/History",
-                "firefox": f"{user_home}/.mozilla/firefox/*.default-release",
+                "firefox": f"{user_home}/.mozilla/firefox/*.default",
             },
             # "Darwin" is macOS
             "darwin": {
                 "chrome": user_home
                 / "Library/Application Support/Google/Chrome/Default/History",
-                "firefox": f"{user_home}/Library/Application Support/Firefox/Profiles/*.default-release",
+                "firefox": f"{user_home}/Library/Application Support/Firefox/Profiles/*.default",
             },
             "windows": {
                 "chrome": Path(
                     rf"{user_home}\AppData\Local\Google\Chrome\User Data\Default\History"
                 ),
-                "firefox": rf"{user_home}\AppData\Roaming\Mozilla\Firefox\Profiles\*.default-release",
+                "firefox": rf"{user_home}\AppData\Roaming\Mozilla\Firefox\Profiles\*.default",
             },
         }
         # determine the default profile, assumed to be the first one

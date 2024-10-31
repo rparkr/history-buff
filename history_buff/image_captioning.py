@@ -71,9 +71,8 @@ import re
 import time
 
 import httpx
-from markdownify import markdownify as md
 import ollama
-
+from markdownify import markdownify as md
 
 pages = [
     "https://docs.marimo.io/guides/working_with_data/plotting.html",
@@ -104,7 +103,7 @@ def explain_code(
     code_strings: list[str],
     context: list[int] | None = None,
     model: str = "qwen2.5-coder:1.5b",
-    prompt: str = "Explain the the following block of Python code, along with its purpose and what it achieves: ",
+    prompt: str = "Explain the the following block of Python code, along with its purpose and what it achieves:\n\n",
 ) -> list[str]:
     """Explain blocks of code using an LLM"""
     if not isinstance(code_strings, list):
@@ -126,6 +125,7 @@ def explain_code(
         )
     return explanations
 
+
 model_explanations = {}
 for model in [
     "qwen2.5-coder:1.5b",
@@ -133,9 +133,8 @@ for model in [
     "codegemma:2b",
 ]:
     model_explanations[model] = explain_code(
-        model=model,
-        code_strings=extract_code(url_to_md(pages[-1]))
+        model=model, code_strings=extract_code(url_to_md(pages[-1]))
     )
-    
+
 with open("model_explanations.json", mode="wt", encoding="utf8") as file:
     json.dump(model_explanations, file)
